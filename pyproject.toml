@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "typefully-twitter-skill"
+version = "0.1.0"
+description = "AI-first Typefully publishing and X analytics CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+typefully-twitter = "typefully_twitter_skill.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "live_integration: tests that call real Typefully or X services and require explicit opt-in",
+]

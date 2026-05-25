@@ -1,0 +1,29 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Local data and generated artifacts
+data/
+logs/
+tmp/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.json
+!*.example.json
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
