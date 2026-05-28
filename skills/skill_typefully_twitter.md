@@ -115,6 +115,8 @@ Before using any live workflow, run:
 typefully-twitter doctor config --format json
 ```
 
+Credential values may be literal strings or 1Password secret references beginning with `op://`. Public documentation must use fake references such as `op://your-vault/your-item/your-field`; keep real vault, item, cookie, and account details in private workspace `.env` files.
+
 The diagnostic should report readiness for each credential family separately. If one family is missing, use the other configured families rather than failing the whole skill.
 
 ## Credential-Based Routing
