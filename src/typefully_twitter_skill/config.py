@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .errors import ConfigError
 
@@ -50,8 +52,19 @@ def load_dotenv(explicit_env_file: str | None = None) -> list[Path]:
     return loaded
 
 
-def _present(name: str) -> bool:
-    return bool(os.getenv(name))
+def resolve_secret_reference(value: str | None) -> str | None:
+    if not value or not value.startswith("op://"):
+        return value
+
+    result = subprocess.run(
+        ["op", "read", value],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise ConfigError("1password", [], f"Failed to resolve 1Password reference: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def _mask(value: str | None) -> str | None:
@@ -83,17 +96,17 @@ class Settings:
         data_dir = Path(os.getenv("TYPEFULLY_TWITTER_DATA_DIR", "data"))
         db_path = Path(os.getenv("TYPEFULLY_TWITTER_DB_PATH", str(data_dir / "twitter_analytics.db")))
         return cls(
-            typefully_api_key=os.getenv("TYPEFULLY_API_KEY"),
-            typefully_social_set_id=os.getenv("TYPEFULLY_SOCIAL_SET_ID"),
-            typefully_authorization=os.getenv("TYPEFULLY_AUTHORIZATION"),
-            typefully_account=os.getenv("TYPEFULLY_ACCOUNT"),
-            typefully_session=os.getenv("TYPEFULLY_SESSION"),
-            typefully_cookie=os.getenv("TYPEFULLY_COOKIE"),
+            typefully_api_key=resolve_secret_reference(os.getenv("TYPEFULLY_API_KEY")),
+            typefully_social_set_id=resolve_secret_reference(os.getenv("TYPEFULLY_SOCIAL_SET_ID")),
+            typefully_authorization=resolve_secret_reference(os.getenv("TYPEFULLY_AUTHORIZATION")),
+            typefully_account=resolve_secret_reference(os.getenv("TYPEFULLY_ACCOUNT")),
+            typefully_session=resolve_secret_reference(os.getenv("TYPEFULLY_SESSION")),
+            typefully_cookie=resolve_secret_reference(os.getenv("TYPEFULLY_COOKIE")),
             typefully_base_url=os.getenv("TYPEFULLY_BASE_URL", "https://typefully.com"),
             typefully_timeout=int(os.getenv("TYPEFULLY_TIMEOUT", "30")),
-            x_auth_token=os.getenv("X_AUTH_TOKEN"),
-            x_csrf_token=os.getenv("X_CSRF_TOKEN"),
-            x_user_id=os.getenv("X_USER_ID"),
+            x_auth_token=resolve_secret_reference(os.getenv("X_AUTH_TOKEN")),
+            x_csrf_token=resolve_secret_reference(os.getenv("X_CSRF_TOKEN")),
+            x_user_id=resolve_secret_reference(os.getenv("X_USER_ID")),
             data_dir=data_dir,
             db_path=db_path,
         )
@@ -124,16 +137,26 @@ class Settings:
             raise ConfigError("typefully_api", ["TYPEFULLY_API_KEY"], "Create a Typefully API key from Settings -> API and add it to .env.")
 
     def require_typefully_metrics(self) -> None:
-        missing = [name for name in ["TYPEFULLY_AUTHORIZATION", "TYPEFULLY_ACCOUNT", "TYPEFULLY_SESSION"] if not _present(name)]
+        missing: list[str] = []
+        if not self.typefully_authorization:
+            missing.append("TYPEFULLY_AUTHORIZATION")
+        if not self.typefully_account:
+            missing.append("TYPEFULLY_ACCOUNT")
+        if not self.typefully_session:
+            missing.append("TYPEFULLY_SESSION")
         if missing:
             raise ConfigError("typefully_metrics", missing, "Configure optional Typefully web-session metrics credentials in .env.")
 
     def require_x_analytics(self) -> None:
-        missing = [name for name in ["X_AUTH_TOKEN", "X_CSRF_TOKEN"] if not _present(name)]
+        missing: list[str] = []
+        if not self.x_auth_token:
+            missing.append("X_AUTH_TOKEN")
+        if not self.x_csrf_token:
+            missing.append("X_CSRF_TOKEN")
         if missing:
             raise ConfigError("x_analytics", missing, "Configure X browser cookies in .env; see README: Get X Cookies for Advanced Analytics.")
 
-    def doctor_payload(self) -> dict[str, object]:
+    def doctor_payload(self) -> dict[str, Any]:
         return {
             "typefully_api": {
                 "configured": self.has_typefully_api(),
