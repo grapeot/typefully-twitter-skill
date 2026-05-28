@@ -28,3 +28,46 @@ def test_load_dotenv_from_explicit_file(tmp_path: Path, monkeypatch):
 
     assert env in loaded
     assert Settings.from_env().typefully_social_set_id == "999"
+
+
+def test_settings_resolves_1password_references(monkeypatch):
+    monkeypatch.setenv("TYPEFULLY_API_KEY", "op://vault/item/api-key")
+    monkeypatch.setenv("TYPEFULLY_AUTHORIZATION", "op://vault/item/authorization")
+    monkeypatch.setenv("TYPEFULLY_ACCOUNT", "op://vault/item/account")
+    monkeypatch.setenv("TYPEFULLY_SESSION", "op://vault/item/session")
+    monkeypatch.setenv("X_AUTH_TOKEN", "op://vault/item/x-auth")
+    monkeypatch.setenv("X_CSRF_TOKEN", "op://vault/item/x-csrf")
+
+    from typefully_twitter_skill import config
+
+    values = {
+        "op://vault/item/api-key": "api-key",
+        "op://vault/item/authorization": "authorization",
+        "op://vault/item/account": "account",
+        "op://vault/item/session": "session",
+        "op://vault/item/x-auth": "x-auth",
+        "op://vault/item/x-csrf": "x-csrf",
+    }
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def fake_run(args, **kwargs):
+        assert args[:2] == ["op", "read"]
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        return Result(values[args[2]] + "\n")
+
+    monkeypatch.setattr(config.subprocess, "run", fake_run)
+
+    settings = Settings.from_env()
+
+    assert settings.typefully_api_key == "api-key"
+    assert settings.has_typefully_metrics() is True
+    assert settings.x_auth_token == "x-auth"
+    assert settings.x_csrf_token == "x-csrf"
+    assert settings.has_x_analytics() is True

@@ -65,6 +65,8 @@ Expose only this root skill at the workspace level. Do not globally register sep
 
 ## Setup Credentials
 
+The CLI accepts either literal values or 1Password secret references for credential values. Public examples use placeholder references such as `op://your-vault/your-item/your-field`; keep real vault and item names in your private workspace `.env`, not in this public repository.
+
 The skill should work in layers. You do not need every credential on day one.
 
 | Setup level | Credentials | What works |
@@ -87,7 +89,7 @@ Use this for publishing and draft management.
 5. Copy the key into your local `.env`:
 
 ```bash
-TYPEFULLY_API_KEY=replace-with-your-real-typefully-api-key
+TYPEFULLY_API_KEY=op://your-vault/your-item/typefully-api-key
 ```
 
 Do not paste the real key into a remote chat. If your AI agent runs locally, ask it to open or edit `.env` and then paste the key into that local file yourself.
@@ -107,8 +109,8 @@ Use this only if you want per-post X analytics. Publishing through Typefully doe
 The analytics module reads the same browser session that analytics.x.com uses. You need two cookie values from a browser where you are already logged into X:
 
 ```bash
-X_AUTH_TOKEN=replace-with-your-x-session-cookie
-X_CSRF_TOKEN=replace-with-your-x-csrf-cookie
+X_AUTH_TOKEN=op://your-vault/your-item/x-auth-token
+X_CSRF_TOKEN=op://your-vault/your-item/x-csrf-token
 ```
 
 Manual Chrome path:
@@ -144,9 +146,9 @@ Cookies are equivalent to a logged-in browser session. Keep them local, do not c
 The current design includes an optional Typefully web metrics family for account-level time series such as followers and engagement rate. This is separate from the official Typefully API key. Configure it only if the implemented version still needs private Typefully web metrics:
 
 ```bash
-TYPEFULLY_AUTHORIZATION=replace-with-your-typefully-web-authorization-header
-TYPEFULLY_ACCOUNT=replace-with-your-typefully-account-id
-TYPEFULLY_SESSION=replace-with-your-typefully-session-id
+TYPEFULLY_AUTHORIZATION=op://your-vault/your-item/typefully-authorization
+TYPEFULLY_ACCOUNT=op://your-vault/your-item/typefully-account
+TYPEFULLY_SESSION=op://your-vault/your-item/typefully-session
 ```
 
 If these are missing, the skill should still publish through Typefully and fetch X per-post analytics when the relevant credentials are present.
