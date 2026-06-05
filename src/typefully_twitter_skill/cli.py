@@ -39,7 +39,7 @@ def _posts_from_args(args: argparse.Namespace) -> list[str]:
     if getattr(args, "thread_stdin", False):
         return parse_thread_text(sys.stdin.read())
     if getattr(args, "text", None):
-        return [args.text]
+        return [args.text.replace("\\n", "\n")]
     raise SystemExit("provide --text, --thread-file, or --thread-stdin")
 
 
