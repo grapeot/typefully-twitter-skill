@@ -33,6 +33,12 @@ def _settings(args: argparse.Namespace) -> Settings:
     return Settings.from_env()
 
 
+def _long_post_enabled(args: argparse.Namespace, settings: Settings) -> bool:
+    if getattr(args, "long_post", None) is not None:
+        return bool(args.long_post)
+    return settings.default_long_post
+
+
 def _posts_from_args(args: argparse.Namespace) -> list[str]:
     if getattr(args, "thread_file", None):
         return parse_thread_file(args.thread_file)
@@ -50,15 +56,16 @@ def cmd_doctor_config(args: argparse.Namespace) -> int:
 
 
 def cmd_post_count(args: argparse.Namespace) -> int:
+    settings = _settings(args)
     posts = _posts_from_args(args)
-    emit({"posts": count_posts(posts)}, as_json=args.format == "json")
+    emit({"posts": count_posts(posts, long_post=_long_post_enabled(args, settings))}, as_json=args.format == "json")
     return 0
 
 
 def cmd_post_draft_or_create(args: argparse.Namespace) -> int:
     settings = _settings(args)
     posts = _posts_from_args(args)
-    validate_posts(posts, long_post=args.long_post)
+    validate_posts(posts, long_post=_long_post_enabled(args, settings))
     client = TypefullyPostClient(settings)
     result = client.create_draft(posts, publish_at=getattr(args, "publish_at", None), draft_title=args.draft_title)
     emit(compact_draft_summary(result), as_json=args.format == "json")
@@ -215,7 +222,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--thread-file")
         p.add_argument("--thread-stdin", action="store_true")
         p.add_argument("--draft-title")
-        p.add_argument("--long-post", action="store_true")
+        long_post = p.add_mutually_exclusive_group()
+        long_post.add_argument("--long-post", dest="long_post", action="store_true", default=None)
+        long_post.add_argument("--no-long-post", dest="long_post", action="store_false")
         if name == "create":
             p.add_argument("--publish-at")
         p.set_defaults(func=func)

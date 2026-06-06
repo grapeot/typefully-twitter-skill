@@ -43,7 +43,7 @@ Please install this Typefully Twitter skill into my workspace:
 
 https://github.com/grapeot/typefully-twitter-skill
 
-Read the repository README first. Then inspect my workspace's AGENTS.md, CLAUDE.md, or skill index, add the root skill to the right discovery location, create a local .env from .env.example, and guide me through filling the required credentials. Do not paste secrets into the chat; ask me to put them into .env locally.
+Read the repository README first. Then inspect my workspace's AGENTS.md, CLAUDE.md, or skill index, add the root skill to the right discovery location, create a local .env from .env.example, and guide me through filling the required credentials. Ask whether my Typefully/X account can publish long posts; if yes, set TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true in local .env. Do not paste secrets into the chat; ask me to put them into .env locally.
 ```
 
 That is the normal path for Codex, Claude Code, Cursor, OpenCode, and similar local agents. The skill is written for agents that can read Markdown instructions and edit files in your local workspace.
@@ -101,6 +101,18 @@ TYPEFULLY_SOCIAL_SET_ID=123456
 ```
 
 Typefully API v2 uses the `Authorization: Bearer <key>` header. Old v1 keys and old `x-api-key` examples are not interchangeable with v2.
+
+### Long-Post Default
+
+Long posts require a Typefully/X account that can publish long-form posts, usually via a Premium-capable account. The CLI keeps the public default conservative: without configuration, `post count`, `post draft`, and `post create` validate against normal X weighted length limits.
+
+During setup, the installing agent should ask whether the user can publish long posts. If the answer is yes, set this in the local `.env`:
+
+```bash
+TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true
+```
+
+This makes long-post validation the default for that workspace, so agents do not have to remember `--long-post` every time. Callers can still override it per command with `--no-long-post`; users without long-post support should leave the variable unset or set it to `false`.
 
 ### 2. Get X Cookies for Advanced Analytics
 
@@ -187,6 +199,8 @@ The CLI exposes:
 ```bash
 typefully-twitter doctor config --format json
 typefully-twitter post count --text "Draft text https://example.com/post"
+typefully-twitter post count --text "Long-form draft text" --long-post
+typefully-twitter post count --text "Normal post text" --no-long-post
 typefully-twitter post draft --text "Draft text"
 typefully-twitter metrics snapshot --start-date 2026-01-01 --end-date 2026-01-14
 typefully-twitter x fetch --days 28
@@ -214,6 +228,7 @@ Copy `.env.example` to `.env`. All examples use fake values and are safe for a p
 The future configuration has three credential families:
 
 - `TYPEFULLY_API_KEY`: Typefully v2 API token for publishing and draft management.
+- `TYPEFULLY_TWITTER_DEFAULT_LONG_POST`: optional boolean; set to `true` only when the account can publish long posts.
 - `TYPEFULLY_AUTHORIZATION`, `TYPEFULLY_ACCOUNT`, `TYPEFULLY_SESSION`, optional `TYPEFULLY_COOKIE`: Typefully web-session credentials for account-level metrics.
 - `X_AUTH_TOKEN`, `X_CSRF_TOKEN`, optional `X_USER_ID`: x.com cookies for analytics.x.com GraphQL endpoints.
 

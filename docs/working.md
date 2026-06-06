@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-06-06
+
+- Added `TYPEFULLY_TWITTER_DEFAULT_LONG_POST` so Premium-capable workspaces can default local count/draft/create validation to long-post limits while preserving normal limits for other users.
+- Added `--no-long-post` as an explicit per-command override when the env default is enabled.
+- Updated setup instructions so installing agents ask whether the account can publish long posts and set the env default only when appropriate.
+
 ### 2026-05-25
 
 - Created the public-ready design scaffold for `typefully_twitter_skill`.

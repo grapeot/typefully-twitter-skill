@@ -56,15 +56,17 @@ def weighted_tweet_length(text: str) -> int:
     return total
 
 
-def count_posts(posts: list[str]) -> list[dict[str, object]]:
+def count_posts(posts: list[str], *, long_post: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    limit = MAX_WEIGHTED_LONG_POST_LENGTH if long_post else MAX_WEIGHTED_TWEET_LENGTH
     for idx, text in enumerate(posts, start=1):
         weighted = weighted_tweet_length(text)
         rows.append({
             "index": idx,
             "weighted_length": weighted,
-            "limit": MAX_WEIGHTED_TWEET_LENGTH,
-            "status": "OK" if weighted <= MAX_WEIGHTED_TWEET_LENGTH else "TOO_LONG",
+            "limit": limit,
+            "long_post": long_post,
+            "status": "OK" if weighted <= limit else "TOO_LONG",
             "text": text,
         })
     return rows

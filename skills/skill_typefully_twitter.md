@@ -33,6 +33,7 @@ Target commands:
 ```bash
 typefully-twitter post count --text "Post text https://example.com/post"
 typefully-twitter post count --thread-file thread.md
+typefully-twitter post count --thread-file thread.md --long-post
 typefully-twitter post draft --text "Post text" --draft-title "Internal title"
 typefully-twitter post draft --thread-file thread.md
 typefully-twitter post create --text "Post text" --publish-at "2026-01-01T18:00:00Z"
@@ -47,7 +48,9 @@ Acceptance criteria:
 
 - Standard posts are checked with X weighted length rules, not visible character count.
 - URLs count as transformed X URL length.
-- Long posts require explicit `--long-post`.
+- Long-post behavior is account-dependent. During setup, ask whether the user's Typefully/X account can publish long posts. If yes, set `TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true` in local `.env`; if no, leave it unset or false.
+- If `TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true`, `post count`, `post draft`, and `post create` use long-post validation by default. Use `--no-long-post` only when the user explicitly wants normal X length limits for a command.
+- If the env default is disabled, use `--long-post` for substantive threads such as analytical articles, deep research summaries, and surveys. When `post count` returns `TOO_LONG` for inherently analytical writing, do not shorten the content to fit unless the user explicitly asks for a single-tweet summary. `post count` is a diagnostic tool; `TOO_LONG` often means the content belongs in long-post mode.
 - Destructive actions require explicit confirmation flags.
 - Machine-readable output is valid JSON when `--format json` is passed.
 
@@ -125,6 +128,7 @@ Treat setup as layered:
 
 - No credentials: provide installation/setup guidance and run local-only checks when implementation supports them.
 - `TYPEFULLY_API_KEY` configured: publishing and draft management are available.
+- `TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true`: long-post validation is the default for local count, draft, and create commands.
 - `X_AUTH_TOKEN` and `X_CSRF_TOKEN` configured: X per-post analytics are available.
 - `TYPEFULLY_AUTHORIZATION`, `TYPEFULLY_ACCOUNT`, and `TYPEFULLY_SESSION` configured: optional Typefully account-level metrics are available.
 
