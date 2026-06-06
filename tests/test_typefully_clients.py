@@ -20,6 +20,7 @@ def base_settings() -> Settings:
         x_user_id=None,
         data_dir=__import__("pathlib").Path("data"),
         db_path=__import__("pathlib").Path("data/twitter_analytics.db"),
+        default_long_post=False,
     )
 
 

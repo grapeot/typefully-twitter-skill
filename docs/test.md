@@ -17,6 +17,7 @@ They should cover:
 
 - `.env` loading and masked `doctor config` output.
 - X weighted character counting, including CJK characters, URLs, and long-post limits.
+- Env-controlled default long-post mode, including explicit `--no-long-post` override.
 - Thread parsing from `---` separators.
 - CLI argument parsing for each command group.
 - JSON output shaping.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from typefully_twitter_skill.config import Settings, load_dotenv
+from typefully_twitter_skill.config import Settings, env_bool, load_dotenv
 
 
 def test_doctor_reports_partial_capabilities(monkeypatch):
@@ -28,6 +28,27 @@ def test_load_dotenv_from_explicit_file(tmp_path: Path, monkeypatch):
 
     assert env in loaded
     assert Settings.from_env().typefully_social_set_id == "999"
+
+
+def test_env_bool_parses_common_values(monkeypatch):
+    monkeypatch.setenv("TYPEFULLY_TWITTER_DEFAULT_LONG_POST", "yes")
+    assert env_bool("TYPEFULLY_TWITTER_DEFAULT_LONG_POST") is True
+
+    monkeypatch.setenv("TYPEFULLY_TWITTER_DEFAULT_LONG_POST", "0")
+    assert env_bool("TYPEFULLY_TWITTER_DEFAULT_LONG_POST") is False
+
+    monkeypatch.delenv("TYPEFULLY_TWITTER_DEFAULT_LONG_POST", raising=False)
+    assert env_bool("TYPEFULLY_TWITTER_DEFAULT_LONG_POST") is False
+
+
+def test_settings_reports_default_long_post(monkeypatch):
+    monkeypatch.setenv("TYPEFULLY_TWITTER_DEFAULT_LONG_POST", "true")
+
+    settings = Settings.from_env()
+    payload = settings.doctor_payload()
+
+    assert settings.default_long_post is True
+    assert payload["posting"]["default_long_post"] is True
 
 
 def test_settings_resolves_1password_references(monkeypatch):

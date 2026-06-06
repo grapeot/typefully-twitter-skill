@@ -75,6 +75,18 @@ def _mask(value: str | None) -> str | None:
     return f"{value[:4]}...{value[-4:]}"
 
 
+def env_bool(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     typefully_api_key: str | None
@@ -90,6 +102,7 @@ class Settings:
     x_user_id: str | None
     data_dir: Path
     db_path: Path
+    default_long_post: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -109,6 +122,7 @@ class Settings:
             x_user_id=resolve_secret_reference(os.getenv("X_USER_ID")),
             data_dir=data_dir,
             db_path=db_path,
+            default_long_post=env_bool("TYPEFULLY_TWITTER_DEFAULT_LONG_POST"),
         )
 
     def has_typefully_api(self) -> bool:
@@ -177,5 +191,6 @@ class Settings:
                 "has_user_id": bool(self.x_user_id),
             },
             "data": {"data_dir": str(self.data_dir), "db_path": str(self.db_path)},
+            "posting": {"default_long_post": self.default_long_post},
             "available_workflows": self.available_workflows(),
         }
