@@ -3,7 +3,7 @@
 Twitter's card preview grabs the first URL-like token it finds. If the post
 body contains an external domain (even without a protocol, e.g. ``Character.AI``
 or ``openai.com``), Twitter may treat it as a URL and use that site's card as
-the hero preview, overriding the intended yage.ai link.
+the hero preview, overriding the intended tracked link.
 
 This module scans post text for two categories of URL-like content:
 
@@ -13,7 +13,7 @@ This module scans post text for two categories of URL-like content:
    ``thereallo.dev``, ``github.com``.
 
 The validator enforces that the entire post body contains exactly one
-URL-like token, and that token must be the yage.ai tracked URL.
+URL-like token, and that token must be the allowed-domain tracked URL.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def find_url_like_tokens(text: str) -> list[UrlFinding]:
 
 
 def _extract_domain(url: str) -> str:
-    """Extract the domain from a URL like https://yage.ai/share/..."""
+    """Extract the domain from a URL like https://example.com/share/..."""
     m = re.match(r"https?://([^/\s]+)", url)
     return m.group(1) if m else ""
 
@@ -160,7 +160,7 @@ def _extract_domain(url: str) -> str:
 def check_post_urls(
     text: str,
     *,
-    allowed_domain: str = "yage.ai",
+    allowed_domain: str = "example.com",
 ) -> UrlCheckResult:
     """Check that a post body contains exactly one URL-like token,
     and that token's domain matches ``allowed_domain``.
@@ -177,7 +177,7 @@ def check_post_urls(
     result.findings = findings
 
     if not findings:
-        result.errors.append("No URL-like tokens found. T (traffic) posts must contain the yage.ai tracked URL.")
+        result.errors.append("No URL-like tokens found. T (traffic) posts must contain the allowed-domain tracked URL.")
         result.passed = False
         return result
 
@@ -234,7 +234,7 @@ def check_post_urls(
 def check_thread_file(
     path: str | Path,
     *,
-    allowed_domain: str = "yage.ai",
+    allowed_domain: str = "example.com",
 ) -> list[dict]:
     """Check a thread file (same format as typefully-twitter --thread-file).
 

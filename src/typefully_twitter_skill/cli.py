@@ -277,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text")
     p.add_argument("--thread-file")
     p.add_argument("--thread-stdin", action="store_true")
-    p.add_argument("--allowed-domain", default="yage.ai")
+    p.add_argument("--allowed-domain", default="example.com")
     p.set_defaults(func=cmd_post_check_urls)
 
     metrics = sub.add_parser("metrics")
