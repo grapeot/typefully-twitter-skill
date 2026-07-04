@@ -14,6 +14,7 @@ from .config import Settings, load_dotenv
 from .errors import ApiError, ConfigError, TypefullyTwitterError
 from .typefully_metrics import METRIC_ENDPOINTS, TypefullyMetricsClient
 from .typefully_post import TypefullyPostClient, compact_draft_summary, count_posts, parse_thread_file, parse_thread_text, validate_posts
+from .url_validator import check_thread_file, check_post_urls
 from .x_analytics import XAnalyticsClient, db_status, extract_posts, open_db, summarize_rows, upsert_posts, window_from_args, write_fetch_outputs
 
 
@@ -105,6 +106,30 @@ def cmd_post_delete(args: argparse.Namespace) -> int:
     client = TypefullyPostClient(_settings(args))
     result = client.delete_draft(args.draft_id)
     emit({"deleted": True, "draft_id": args.draft_id, "result": result}, as_json=args.format == "json")
+    return 0
+
+
+def cmd_post_check_urls(args: argparse.Namespace) -> int:
+    """Check a thread file or text for URL uniqueness (only yage.ai allowed)."""
+    allowed_domain = getattr(args, "allowed_domain", "yage.ai")
+    if getattr(args, "thread_file", None):
+        results = check_thread_file(args.thread_file, allowed_domain=allowed_domain)
+    elif getattr(args, "thread_stdin", False):
+        text = sys.stdin.read()
+        r = check_post_urls(text, allowed_domain=allowed_domain)
+        results = [{"tweet_index": 1, **r.to_dict()}]
+    elif getattr(args, "text", None):
+        r = check_post_urls(args.text.replace("\\n", "\n"), allowed_domain=allowed_domain)
+        results = [{"tweet_index": 1, **r.to_dict()}]
+    else:
+        raise SystemExit("provide --thread-file, --thread-stdin, or --text")
+
+    emit({"results": results, "all_passed": all(r.get("passed", False) for r in results)},
+         as_json=args.format == "json")
+
+    # Return non-zero if any check failed, so CI/scripts can gate on it
+    if not all(r.get("passed", False) for r in results):
+        return 1
     return 0
 
 
@@ -248,6 +273,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("draft_id")
     p.add_argument("--confirm-delete", action="store_true")
     p.set_defaults(func=cmd_post_delete)
+    p = post_sub.add_parser("check-urls")
+    p.add_argument("--text")
+    p.add_argument("--thread-file")
+    p.add_argument("--thread-stdin", action="store_true")
+    p.add_argument("--allowed-domain", default="yage.ai")
+    p.set_defaults(func=cmd_post_check_urls)
 
     metrics = sub.add_parser("metrics")
     metrics_sub = metrics.add_subparsers(dest="cmd", required=True)
