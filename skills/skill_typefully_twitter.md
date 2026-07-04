@@ -42,16 +42,23 @@ typefully-twitter post schedule <draft_id> --at "2026-01-01T18:00:00Z"
 typefully-twitter post list --status scheduled --limit 20 --format json
 typefully-twitter post get <draft_id> --format json
 typefully-twitter post delete <draft_id> --confirm-delete
+typefully-twitter post check-urls --thread-file thread.md --allowed-domain example.com
+typefully-twitter post check-urls --text "Post text https://example.com/post" --format json
 ```
 
 Acceptance criteria:
 
 - Standard posts are checked with X weighted length rules, not visible character count.
 - URLs count as transformed X URL length.
+- `--thread-file` is treated as publishable post body, not as a Markdown document with metadata. The CLI preserves Markdown headings, labels, comments, and frontmatter as literal post text unless the implementation explicitly says otherwise.
+- Before any live `post draft`, `post create`, `post publish`, or `post schedule`, inspect the exact outgoing `text` from `post count` or `post get`. The first visible line must be reader-facing copy. Reject files whose first line is an internal label such as `# Twitter copy`, `# Twitter 文案`, `Typefully long post`, `T 导流帖`, `R/T/N`, draft notes, agent instructions, or channel metadata.
+- If a prepared copy file contains internal notes plus public copy, create a separate sanitized publish file or use `--text` / `--thread-stdin` with only the public copy. Do not assume Markdown headings or frontmatter will be stripped.
 - Long-post behavior is account-dependent. During setup, ask whether the user's Typefully/X account can publish long posts. If yes, set `TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true` in local `.env`; if no, leave it unset or false.
 - If `TYPEFULLY_TWITTER_DEFAULT_LONG_POST=true`, `post count`, `post draft`, and `post create` use long-post validation by default. Use `--no-long-post` only when the user explicitly wants normal X length limits for a command.
 - If the env default is disabled, use `--long-post` for substantive threads such as analytical articles, deep research summaries, and surveys. When `post count` returns `TOO_LONG` for inherently analytical writing, do not shorten the content to fit unless the user explicitly asks for a single-tweet summary. `post count` is a diagnostic tool; `TOO_LONG` often means the content belongs in long-post mode.
+- For article distribution posts (e.g. from a content platform), default to Typefully long post. A "single Twitter post" means one Typefully post, not a 280-character normal X post. Do not impose the 280-character limit unless the user explicitly says "普通推文", "280 字内", "short tweet", or uses `--no-long-post`.
 - Destructive actions require explicit confirmation flags.
+- `post check-urls` validates that the post body contains exactly one URL-like token on the allowed domain. It catches both explicit URLs (`https://...`) and bare-domain tokens that Twitter's card preview may grab (e.g. `Character.AI`, `thereallo.dev`). The default allowed domain is `example.com`; override with `--allowed-domain`. Returns exit code 1 on failure, so it can be used as a pre-publish gate in CI or agent workflows. Run `post check-urls` on every `--thread-file` before `post draft` or `post create`.
 - Machine-readable output is valid JSON when `--format json` is passed.
 
 ### Typefully Metrics
