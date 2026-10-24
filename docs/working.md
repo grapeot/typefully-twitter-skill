@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-10-23
+
+- Added media support: `media check|upload|status`, and `--media`, `--post-media`, `--media-file`, `--post-media-file`, `--alt-text`, `--made-with-ai`, `--made-with-ai-post` on `post draft|create`. The upload follows Typefully v2's presign, header-less `PUT`, and status-polling flow, and a draft is created only after every attached media ID reads back as `ready`.
+- `post check-urls` now takes repeatable `--allowed-domain`, `--include-subdomains`, `--expected-urls`, and `--post-expected-urls`. For thread files, the combined check now expects the sum of the per-post counts instead of exactly one URL across the whole thread.
+- `post draft|create` summaries now list `media_ids` and the AI label per post.
+- Closed the deferred media-upload decision in the RFC.
+- Lesson: Typefully caps X video at 10 minutes and 512 MB even for Premium accounts; long videos need a clip plus a link.
+
 ### 2026-06-06
 
 - Added `TYPEFULLY_TWITTER_DEFAULT_LONG_POST` so Premium-capable workspaces can default local count/draft/create validation to long-post limits while preserving normal limits for other users.

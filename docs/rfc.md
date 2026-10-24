@@ -79,9 +79,36 @@ typefully-twitter post schedule <draft_id> --at "2026-01-01T18:00:00Z"
 typefully-twitter post list --status scheduled --limit 20 --format json
 typefully-twitter post get <draft_id> --format json
 typefully-twitter post delete <draft_id> --confirm-delete
+typefully-twitter post draft --thread-file thread.md --media <media_id> --made-with-ai-post 1
+typefully-twitter post check-urls --thread-file thread.md --allowed-domain example.com --allowed-domain example.org --include-subdomains --post-expected-urls 2=2
 ```
 
 Publishing commands use the Typefully v2 API credential family. They must validate weighted length before draft creation unless `--long-post` is explicitly passed. Deletion must require `--confirm-delete`.
+
+### Media Commands
+
+```bash
+typefully-twitter media check <path>
+typefully-twitter media upload <path> [--alt-text TEXT] [--no-wait] [--timeout 600] [--interval 3]
+typefully-twitter media status <media_id>
+```
+
+`post draft` and `post create` accept `--media MEDIA_ID` (post 1), `--post-media N=MEDIA_ID`, `--media-file PATH` (post 1), `--post-media-file N=PATH`, `--alt-text` (for uploaded files), `--made-with-ai` (every post), and `--made-with-ai-post N`. All flags are repeatable except `--alt-text` and `--made-with-ai`.
+
+Flow, following the Typefully v2 API: `POST /v2/social-sets/{id}/media/upload` with `file_name` (must match `^[a-zA-Z0-9_.()-]+\.(jpg|jpeg|png|webp|gif|mp4|mov|pdf)$`, so local names are sanitized) returns `media_id` and a presigned `upload_url`; the client `PUT`s the raw bytes to that URL; `GET /v2/social-sets/{id}/media/{media_id}` is polled until `status` is `ready` (or `failed`, with `error_reason`). Draft posts then carry `media_ids` and optionally `made_with_ai: true` in `platforms.x.posts[i]`. Scheduling is unchanged.
+
+Invariants:
+
+1. A draft never references media whose status is not `ready`; the CLI re-reads every media ID before creating the draft.
+2. The presigned `PUT` sends no `Authorization` or `Content-Type` header (the signature was computed without them), and the upload URL never appears in output or error messages.
+3. Each X post holds at most one video or GIF, does not mix video with images, and holds at most four images. This is checked before the draft is created.
+4. Local files that break Typefully's X limits fail in `media check` before any network request.
+5. Uploading media and creating a draft are remote writes that are not publicly visible; scheduling and publishing keep the existing safety rules.
+6. Without media flags, draft payloads are byte-for-byte what they were before media support.
+
+### URL Checks
+
+`post check-urls` accepts repeatable `--allowed-domain`, `--include-subdomains` (a host matches when it equals an allowed domain or ends with `.` plus it), `--expected-urls N` (default 1, per post), and `--post-expected-urls N=COUNT`. Every URL-like token must be on an allowed domain, and each post must hold exactly its expected count; the combined thread check expects the sum.
 
 ### Typefully Metrics Commands
 
@@ -176,9 +203,12 @@ The public repo contains the technical skill contract and fake examples. Workspa
 
 The public root skill should be installable on its own. Private overlays may add policy, but the public skill must remain useful without them.
 
+## Resolved Decisions
+
+- Media upload is supported (see Media Commands). Videos longer than Typefully's 10-minute limit stay out of scope; they can only be uploaded natively on x.com.
+
 ## Deferred Decisions
 
-- Whether to support media upload in the first implementation phase.
 - Whether to include a built-in report generator or keep reporting outside the package.
 - Whether to expose SQL helper commands beyond `db-status`.
 - Whether to provide shell wrappers in `scripts/` after the Python console script exists.

@@ -12,6 +12,8 @@ GitHub repository: `https://github.com/grapeot/typefully-twitter-skill`
 
 - Create, schedule, publish, list, inspect, and delete Typefully drafts for X.
 - Validate X weighted character counts before publishing, including URL handling and long-post mode.
+- Upload images and videos to Typefully, wait until processing finishes, and attach them to specific posts in a draft, with an optional per-post "made with AI" label.
+- Check post copy so each post carries exactly the expected number of links, all on domains you allow.
 - Fetch Typefully account-level metrics such as impressions, followers, engagements, engagement rate, and profile clicks.
 - Fetch X per-post analytics, including cumulative post metrics, hourly curves, audience breakdowns, and local SQLite sync.
 - Provide one root Markdown skill contract that routes agents to the correct command family.
@@ -62,6 +64,23 @@ For Typefully publishing, Typefully metrics, or X/Twitter per-post analytics, re
 ```
 
 Expose only this root skill at the workspace level. Do not globally register separate publish, metrics, and analytics skills; the root skill handles routing.
+
+## Media (Images and Video)
+
+Typefully's API uploads media in three steps: ask for a presigned upload URL, `PUT` the raw file bytes to it with no extra headers, then poll the media status until it is `ready`. The CLI wraps this:
+
+```bash
+typefully-twitter media check clip.mp4                 # local only: format, size, duration, fps, bitrate, aspect
+typefully-twitter media upload clip.mp4 --alt-text "Short description" --format json
+typefully-twitter media status <media_id> --format json
+typefully-twitter post draft --thread-file thread.md --media <media_id> --made-with-ai-post 1
+typefully-twitter post draft --thread-file thread.md --media-file clip.mp4      # check, upload, wait, attach
+typefully-twitter post draft --thread-file thread.md --post-media 2=<media_id>  # attach to post 2
+```
+
+Limits for X through Typefully (from Typefully's [Supported Media Formats](https://support.typefully.com/en/articles/8717768-supported-media-formats)): video MP4 or MOV, at most 512 MB and 10 minutes, at most 60 fps and 30 Mbps, aspect ratio between 1:2.39 and 2.39:1; images 5 MB on free plans and 20 MB on paid plans (set `TYPEFULLY_MEDIA_IMAGE_MAX_MB=20`); GIFs 15 MB. One X post holds one video or GIF, or up to four images. X Premium allows much longer videos, but only when uploaded natively on x.com; for long videos, cut a clip and link to the full version. Files that break these limits are rejected locally before any request is sent. `media check` uses `ffprobe` when it is installed; without it, duration and frame rate are not checked.
+
+The API reference is at `https://typefully.com/docs/api` and the OpenAPI spec at `https://api.typefully.com/v2/openapi.json`.
 
 ## Setup Credentials
 

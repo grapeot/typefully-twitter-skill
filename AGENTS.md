@@ -2,7 +2,7 @@
 
 ## Project Role
 
-This repository designs an AI-first skill for Typefully publishing, Typefully account-level metrics, and X/Twitter per-post analytics. The current phase is design only. Do not add implementation code unless the user explicitly asks for the implementation phase.
+This repository designs an AI-first skill for Typefully publishing, Typefully account-level metrics, and X/Twitter per-post analytics. The CLI is implemented; keep the docs, tests, and skill contract aligned when the command contract changes.
 
 The repository is intended to become a public GitHub repo. Keep all examples fake and publishable.
 

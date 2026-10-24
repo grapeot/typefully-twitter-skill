@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
 from .config import Settings
-from .errors import ApiError
+from .errors import ApiError, MediaProcessingError
 
 
 DEFAULT_API_BASE = "https://api.typefully.com/v2"
@@ -118,8 +119,24 @@ class TypefullyPostClient:
     def _social_url(self, path: str) -> str:
         return f"{self.base_url}/social-sets/{self.resolve_social_set_id()}{path}"
 
-    def create_draft(self, posts: list[str], *, publish_at: str | None = None, draft_title: str | None = None) -> Any:
-        payload: dict[str, Any] = {"platforms": {"x": {"enabled": True, "posts": [{"text": text} for text in posts]}}}
+    def create_draft(
+        self,
+        posts: list[str],
+        *,
+        publish_at: str | None = None,
+        draft_title: str | None = None,
+        media: dict[int, list[str]] | None = None,
+        made_with_ai: set[int] | None = None,
+    ) -> Any:
+        """Create an X draft.
+
+        ``media`` maps a zero-based post index to the media IDs attached to
+        that post. ``made_with_ai`` is the set of zero-based post indexes
+        labeled as made with AI. Without either argument the payload is the
+        same as before media support existed.
+        """
+        x_posts = build_x_posts(posts, media=media, made_with_ai=made_with_ai)
+        payload: dict[str, Any] = {"platforms": {"x": {"enabled": True, "posts": x_posts}}}
         if publish_at:
             payload["publish_at"] = publish_at
         if draft_title:
@@ -141,8 +158,108 @@ class TypefullyPostClient:
     def delete_draft(self, draft_id: str) -> Any:
         return self._request("DELETE", self._social_url(f"/drafts/{draft_id}"))
 
+    # Media -----------------------------------------------------------------
+
+    def create_media_upload(self, file_name: str, *, alt_text: str | None = None) -> dict[str, Any]:
+        """Ask Typefully for a presigned upload URL. Returns media_id and upload_url."""
+        body: dict[str, Any] = {"file_name": file_name}
+        if alt_text:
+            body["alt_text"] = alt_text
+        return self._request("POST", self._social_url("/media/upload"), json=body)
+
+    def put_presigned(self, upload_url: str, path: str | Path, *, timeout: float | None = None) -> int:
+        """PUT raw file bytes to the presigned URL.
+
+        The presigned signature was computed without headers, so this request
+        must not send Authorization or Content-Type (S3 answers 403
+        SignatureDoesNotMatch otherwise). The URL carries a signature and is
+        never echoed in errors.
+        """
+        file_path = Path(path)
+        with file_path.open("rb") as handle:
+            response = requests.put(upload_url, data=handle, timeout=timeout or max(self.timeout, 600))
+        if response.status_code not in (200, 204):
+            raise ApiError("typefully_media_upload", response.status_code, _redact(response.text[:300], upload_url))
+        return response.status_code
+
+    def get_media(self, media_id: str) -> dict[str, Any]:
+        return self._request("GET", self._social_url(f"/media/{media_id}"))
+
+    def wait_media_ready(
+        self,
+        media_id: str,
+        *,
+        timeout: float = 600,
+        interval: float = 3,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> dict[str, Any]:
+        """Poll media status until ready; raise MediaProcessingError on failed or timeout."""
+        deadline = clock() + timeout
+        while True:
+            info = self.get_media(media_id)
+            status = info.get("status")
+            if status == "ready":
+                return info
+            if status == "failed":
+                raise MediaProcessingError(media_id, "failed", info.get("error_reason"))
+            if clock() >= deadline:
+                raise MediaProcessingError(media_id, status or "unknown", f"not ready after {timeout:.0f} s")
+            sleep(interval)
+
+    def upload_media(
+        self,
+        path: str | Path,
+        *,
+        file_name: str,
+        alt_text: str | None = None,
+        wait: bool = True,
+        timeout: float = 600,
+        interval: float = 3,
+    ) -> dict[str, Any]:
+        """Run the three-step upload and return a summary without the upload URL."""
+        created = self.create_media_upload(file_name, alt_text=alt_text)
+        media_id = str(created["media_id"])
+        self.put_presigned(created["upload_url"], path)
+        if not wait:
+            return {"media_id": media_id, "file_name": file_name, "status": "uploaded"}
+        info = self.wait_media_ready(media_id, timeout=timeout, interval=interval)
+        return {**info, "media_id": media_id}
+
+
+def build_x_posts(
+    posts: list[str],
+    *,
+    media: dict[int, list[str]] | None = None,
+    made_with_ai: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    media = media or {}
+    made_with_ai = made_with_ai or set()
+    bad = sorted(i for i in [*media, *made_with_ai] if i < 0 or i >= len(posts))
+    if bad:
+        raise ValueError(f"Post index out of range for a {len(posts)}-post draft: {[i + 1 for i in bad]}")
+    x_posts: list[dict[str, Any]] = []
+    for idx, text in enumerate(posts):
+        item: dict[str, Any] = {"text": text}
+        if media.get(idx):
+            item["media_ids"] = list(media[idx])
+        if idx in made_with_ai:
+            item["made_with_ai"] = True
+        x_posts.append(item)
+    return x_posts
+
+
+def _redact(text: str, secret: str) -> str:
+    if secret and secret in text:
+        text = text.replace(secret, "<redacted-upload-url>")
+    base = secret.split("?", 1)[0] if secret else ""
+    if base and base in text:
+        text = text.replace(base, "<redacted-upload-url>")
+    return text
+
 
 def compact_draft_summary(draft: dict[str, Any]) -> dict[str, Any]:
+    x_posts = (((draft.get("platforms") or {}).get("x") or {}).get("posts")) or []
     return {
         "id": draft.get("id"),
         "status": draft.get("status"),
@@ -150,6 +267,15 @@ def compact_draft_summary(draft: dict[str, Any]) -> dict[str, Any]:
         "published_at": draft.get("published_at"),
         "x_published_url": draft.get("x_published_url"),
         "preview": draft.get("preview"),
+        "posts": [
+            {
+                "index": idx,
+                "first_line": (post.get("text") or "").split("\n", 1)[0],
+                "media_ids": post.get("media_ids") or [],
+                "made_with_ai": bool(post.get("made_with_ai")),
+            }
+            for idx, post in enumerate(x_posts, start=1)
+        ],
         "raw": draft,
     }
 

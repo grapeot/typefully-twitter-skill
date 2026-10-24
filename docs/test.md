@@ -2,7 +2,15 @@
 
 ## Current Phase
 
-The current repository phase is design only. There is no executable implementation yet. Validation for this phase is document and privacy validation:
+The CLI is implemented. Offline tests run with `pytest`; live tests are opt-in. Media coverage lives in `tests/test_typefully_media.py` and multi-domain URL checks in `tests/test_url_validator.py`:
+
+- Local media checks: filename sanitizing, ffprobe parsing, the 10-minute / fps / bitrate / aspect limits, unsupported or missing files, and the no-ffprobe warning.
+- Payloads: no-media drafts are unchanged; media IDs and the AI label land on the right post; out-of-range indexes are rejected.
+- Client flow (mocked `requests`): the upload request body, a presigned `PUT` without headers, polling from `processing` to `ready`, `failed` with its reason, timeouts, and redaction of the upload URL in errors.
+- CLI: drafts re-check that media is ready, reject two videos on one post, reject bad indexes, and fail local file checks before any request.
+- URL checks: several allowed domains, subdomain matching (a lookalike such as `badexample.com` must not match `example.com`), expected counts per post, and the combined thread count.
+
+The original design-phase checks still apply to the docs:
 
 - Required design files exist.
 - Public docs contain fake credentials and fake examples only.

@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 # Explicit URL: http(s)://...
 EXPLICIT_URL_RE = re.compile(r"https?://\S+")
@@ -157,52 +158,70 @@ def _extract_domain(url: str) -> str:
     return m.group(1) if m else ""
 
 
+def _normalize_domains(allowed_domain: str | Sequence[str]) -> list[str]:
+    if isinstance(allowed_domain, str):
+        domains = [allowed_domain]
+    else:
+        domains = list(allowed_domain)
+    return [d.strip().lower() for d in domains if d and d.strip()]
+
+
+def domain_allowed(domain: str, allowed: Sequence[str], *, include_subdomains: bool = False) -> bool:
+    host = domain.lower().split(":", 1)[0]
+    for d in allowed:
+        if host == d or (include_subdomains and host.endswith("." + d)):
+            return True
+    return False
+
+
 def check_post_urls(
     text: str,
     *,
-    allowed_domain: str = "example.com",
+    allowed_domain: str | Sequence[str] = "example.com",
+    include_subdomains: bool = False,
+    expected_count: int = 1,
 ) -> UrlCheckResult:
-    """Check that a post body contains exactly one URL-like token,
-    and that token's domain matches ``allowed_domain``.
+    """Check that a post body contains exactly ``expected_count`` URL-like
+    tokens, all on an allowed domain.
 
     Args:
         text: The full post body (all tweets concatenated or a single tweet).
-        allowed_domain: The domain that the single allowed URL must belong to.
+        allowed_domain: One domain or a list of domains. A URL passes when its
+            host equals one of them (or is a subdomain of one, when
+            ``include_subdomains`` is true).
+        include_subdomains: Also accept subdomains such as ``www.<domain>``.
+        expected_count: How many URL-like tokens the post must contain.
+            Defaults to 1, the single tracked link rule.
 
     Returns:
         UrlCheckResult with findings, errors, warnings, and passed flag.
     """
-    result = UrlCheckResult(allowed_domain=allowed_domain)
+    domains = _normalize_domains(allowed_domain)
+    label = ", ".join(domains)
+    result = UrlCheckResult(allowed_domain=label)
     findings = find_url_like_tokens(text)
     result.findings = findings
+
+    if expected_count == 0:
+        if findings:
+            result.errors.append(f"Expected no URL-like tokens but found {len(findings)}.")
+            result.passed = False
+        else:
+            result.passed = True
+        return result
 
     if not findings:
         result.errors.append("No URL-like tokens found. T (traffic) posts must contain the allowed-domain tracked URL.")
         result.passed = False
         return result
 
-    # Filter: which findings are on the allowed domain?
-    allowed_findings = [
-        f for f in findings
-        if f.domain.lower() == allowed_domain.lower()
-    ]
-    disallowed_findings = [
-        f for f in findings
-        if f.domain.lower() != allowed_domain.lower()
-    ]
+    allowed_findings = [f for f in findings if domain_allowed(f.domain, domains, include_subdomains=include_subdomains)]
+    disallowed_findings = [f for f in findings if f not in allowed_findings]
 
     if len(allowed_findings) == 0:
         result.errors.append(
-            f"No URL on allowed domain ({allowed_domain}) found. "
-            f"The post contains {len(findings)} URL-like token(s) but none on {allowed_domain}."
-        )
-        result.passed = False
-        return result
-
-    if len(allowed_findings) > 1:
-        result.errors.append(
-            f"Multiple URLs on allowed domain ({allowed_domain}) found: "
-            f"{len(allowed_findings)}. Expected exactly 1."
+            f"No URL on allowed domain ({label}) found. "
+            f"The post contains {len(findings)} URL-like token(s) but none on {label}."
         )
         result.passed = False
         return result
@@ -214,55 +233,95 @@ def check_post_urls(
                 f"Disallowed {kind_label}: \"{f.text}\" "
                 f"(domain: {f.domain}). "
                 f"Twitter may use this as the card preview hero, "
-                f"overriding the {allowed_domain} link. "
+                f"overriding the {label} link. "
                 f"Replace with a name-only mention (e.g. \"the Character.AI case\" "
                 f"without the dot-TLD pattern, or rephrase to avoid the token)."
             )
         result.passed = False
         return result
 
-    # Exactly 1 finding, on the allowed domain
+    if len(allowed_findings) != expected_count:
+        noun = "More" if len(allowed_findings) > expected_count else "Fewer"
+        if expected_count == 1 and len(allowed_findings) > 1:
+            result.errors.append(
+                f"Multiple URLs on allowed domain ({label}) found: "
+                f"{len(allowed_findings)}. Expected exactly 1."
+            )
+        else:
+            result.errors.append(
+                f"{noun} URLs than expected on allowed domains ({label}): "
+                f"found {len(allowed_findings)}, expected exactly {expected_count}."
+            )
+        result.passed = False
+        return result
+
     result.passed = True
-    result.warnings.append(
-        f"OK: exactly 1 URL-like token on allowed domain ({allowed_domain}): "
-        f"\"{allowed_findings[0].text[:80]}...\" "
-        f"kind={allowed_findings[0].kind}"
-    )
+    for f in allowed_findings:
+        result.warnings.append(
+            f"OK: URL-like token on allowed domain ({label}): "
+            f"\"{f.text[:80]}...\" kind={f.kind}"
+        )
     return result
 
 
 def check_thread_file(
     path: str | Path,
     *,
-    allowed_domain: str = "example.com",
+    allowed_domain: str | Sequence[str] = "example.com",
+    include_subdomains: bool = False,
+    expected_counts: dict[int, int] | None = None,
+    default_expected: int = 1,
 ) -> list[dict]:
     """Check a thread file (same format as typefully-twitter --thread-file).
 
     The file may contain multiple tweets separated by ``---``.
-    Each tweet is checked individually, and the full concatenated text
-    is also checked (bare-domain tokens can span tweet boundaries in
-    Twitter's rendering).
+    Each tweet is checked individually against its expected URL count
+    (``expected_counts`` maps 1-based tweet index to a count; others use
+    ``default_expected``), and the full concatenated text is also checked
+    against the sum of those counts.
 
     Returns a list of per-tweet results plus a combined check.
     """
     from .typefully_post import parse_thread_file
 
     posts = parse_thread_file(path)
+    return check_thread_posts(
+        posts,
+        allowed_domain=allowed_domain,
+        include_subdomains=include_subdomains,
+        expected_counts=expected_counts,
+        default_expected=default_expected,
+    )
+
+
+def check_thread_posts(
+    posts: list[str],
+    *,
+    allowed_domain: str | Sequence[str] = "example.com",
+    include_subdomains: bool = False,
+    expected_counts: dict[int, int] | None = None,
+    default_expected: int = 1,
+) -> list[dict]:
+    expected_counts = expected_counts or {}
     results: list[dict] = []
-
+    total_expected = 0
     for idx, post_text in enumerate(posts, start=1):
-        r = check_post_urls(post_text, allowed_domain=allowed_domain)
-        results.append({
-            "tweet_index": idx,
-            **r.to_dict(),
-        })
+        expected = expected_counts.get(idx, default_expected)
+        total_expected += expected
+        r = check_post_urls(
+            post_text,
+            allowed_domain=allowed_domain,
+            include_subdomains=include_subdomains,
+            expected_count=expected,
+        )
+        results.append({"tweet_index": idx, "expected_urls": expected, **r.to_dict()})
 
-    # Also check the full concatenated text
     full_text = "\n".join(posts)
-    combined = check_post_urls(full_text, allowed_domain=allowed_domain)
-    results.append({
-        "tweet_index": "combined",
-        **combined.to_dict(),
-    })
-
+    combined = check_post_urls(
+        full_text,
+        allowed_domain=allowed_domain,
+        include_subdomains=include_subdomains,
+        expected_count=total_expected,
+    )
+    results.append({"tweet_index": "combined", "expected_urls": total_expected, **combined.to_dict()})
     return results
