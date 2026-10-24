@@ -37,3 +37,16 @@ class ApiError(TypefullyTwitterError):
 
     def to_payload(self) -> dict[str, object]:
         return {"error": "http_error", "service": self.service, "status_code": self.status_code, "body": self.body}
+
+
+class MediaProcessingError(TypefullyTwitterError):
+    """Raised when uploaded media fails processing or does not become ready in time."""
+
+    def __init__(self, media_id: str, status: str, reason: str | None) -> None:
+        self.media_id = media_id
+        self.status = status
+        self.reason = reason
+        super().__init__(f"media {media_id} is {status}: {reason}")
+
+    def to_payload(self) -> dict[str, object]:
+        return {"error": "media_not_ready", "media_id": self.media_id, "status": self.status, "reason": self.reason}

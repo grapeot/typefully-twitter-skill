@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings, load_dotenv
-from .errors import ApiError, ConfigError, TypefullyTwitterError
+from .errors import ApiError, ConfigError, MediaProcessingError, TypefullyTwitterError
 from .typefully_metrics import METRIC_ENDPOINTS, TypefullyMetricsClient
+from .typefully_media import check_media, kind_from_media_info, validate_post_media_kinds
 from .typefully_post import TypefullyPostClient, compact_draft_summary, count_posts, parse_thread_file, parse_thread_text, validate_posts
-from .url_validator import check_thread_file, check_post_urls
+from .url_validator import check_thread_posts
 from .x_analytics import XAnalyticsClient, db_status, extract_posts, open_db, summarize_rows, upsert_posts, window_from_args, write_fetch_outputs
 
 
@@ -63,13 +64,134 @@ def cmd_post_count(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_index_value(raw: str, flag: str) -> tuple[int, str]:
+    if "=" not in raw:
+        raise SystemExit(f"{flag} expects N=VALUE (1-based post index), got {raw!r}")
+    index_raw, value = raw.split("=", 1)
+    try:
+        index = int(index_raw)
+    except ValueError:
+        raise SystemExit(f"{flag} expects an integer post index, got {index_raw!r}") from None
+    if index < 1 or not value:
+        raise SystemExit(f"{flag} expects N>=1 and a non-empty value, got {raw!r}")
+    return index - 1, value
+
+
+def _media_plan(args: argparse.Namespace) -> tuple[dict[int, list[str]], dict[int, list[str]]]:
+    """Return (media_ids by post, local files by post), zero-based post indexes."""
+    media_ids: dict[int, list[str]] = {}
+    files: dict[int, list[str]] = {}
+    for media_id in getattr(args, "media", None) or []:
+        media_ids.setdefault(0, []).append(media_id)
+    for raw in getattr(args, "post_media", None) or []:
+        idx, media_id = _parse_index_value(raw, "--post-media")
+        media_ids.setdefault(idx, []).append(media_id)
+    for path in getattr(args, "media_file", None) or []:
+        files.setdefault(0, []).append(path)
+    for raw in getattr(args, "post_media_file", None) or []:
+        idx, path = _parse_index_value(raw, "--post-media-file")
+        files.setdefault(idx, []).append(path)
+    return media_ids, files
+
+
+def _made_with_ai(args: argparse.Namespace, post_count: int) -> set[int]:
+    indexes: set[int] = set()
+    if getattr(args, "made_with_ai", False):
+        indexes.update(range(post_count))
+    for raw in getattr(args, "made_with_ai_post", None) or []:
+        if raw < 1:
+            raise SystemExit(f"--made-with-ai-post expects N>=1, got {raw}")
+        indexes.add(raw - 1)
+    return indexes
+
+
 def cmd_post_draft_or_create(args: argparse.Namespace) -> int:
     settings = _settings(args)
     posts = _posts_from_args(args)
     validate_posts(posts, long_post=_long_post_enabled(args, settings))
+    media_ids, media_files = _media_plan(args)
+    made_with_ai = _made_with_ai(args, len(posts))
+    out_of_range = sorted(i + 1 for i in [*media_ids, *media_files, *made_with_ai] if i < 0 or i >= len(posts))
+    if out_of_range:
+        raise SystemExit(f"post index out of range for a {len(posts)}-post draft: {out_of_range}")
+
+    # Local checks for files before any remote write.
+    checks = {idx: [check_media(path) for path in paths] for idx, paths in media_files.items()}
+    failures = [c.to_dict() for cs in checks.values() for c in cs if not c.ok]
+    if failures:
+        emit({"error": "media_check_failed", "checks": failures}, as_json=args.format == "json")
+        return 1
+
     client = TypefullyPostClient(settings)
-    result = client.create_draft(posts, publish_at=getattr(args, "publish_at", None), draft_title=args.draft_title)
+
+    def _ready_kind(media_id: str) -> str:
+        info = client.get_media(media_id)
+        if info.get("status") != "ready":
+            raise MediaProcessingError(media_id, info.get("status") or "unknown", info.get("error_reason") or "media is not ready")
+        return kind_from_media_info(info)
+
+    # Invariant: every pre-supplied media is ready, and each post's mix is valid on X,
+    # checked before any upload so a bad mix never wastes an upload.
+    kinds_by_post: dict[int, list[str]] = {idx: [_ready_kind(m) for m in ids] for idx, ids in media_ids.items()}
+    for idx, cs in checks.items():
+        kinds_by_post.setdefault(idx, []).extend(c.kind for c in cs)
+    for idx, kinds in sorted(kinds_by_post.items()):
+        errors = validate_post_media_kinds(kinds)
+        if errors:
+            emit({"error": "invalid_post_media", "post_index": idx + 1, "errors": errors}, as_json=args.format == "json")
+            return 1
+
+    uploaded: list[str] = []
+    for idx, cs in sorted(checks.items()):
+        for check in cs:
+            try:
+                info = client.upload_media(check.path, file_name=check.upload_name, alt_text=getattr(args, "alt_text", None))
+            except (ApiError, MediaProcessingError) as exc:
+                emit({**exc.to_payload(), "uploaded_media_ids": uploaded, "failed_file": check.path}, as_json=args.format == "json")
+                return 1
+            if info.get("status") != "ready":
+                raise MediaProcessingError(str(info["media_id"]), str(info.get("status")), "media is not ready")
+            uploaded.append(str(info["media_id"]))
+            media_ids.setdefault(idx, []).append(str(info["media_id"]))
+
+    result = client.create_draft(
+        posts,
+        publish_at=getattr(args, "publish_at", None),
+        draft_title=args.draft_title,
+        media=media_ids or None,
+        made_with_ai=made_with_ai or None,
+    )
     emit(compact_draft_summary(result), as_json=args.format == "json")
+    return 0
+
+
+def cmd_media_check(args: argparse.Namespace) -> int:
+    check = check_media(args.path)
+    emit(check.to_dict(), as_json=args.format == "json")
+    return 0 if check.ok else 1
+
+
+def cmd_media_upload(args: argparse.Namespace) -> int:
+    check = check_media(args.path)
+    if not check.ok:
+        emit({"error": "media_check_failed", "checks": [check.to_dict()]}, as_json=args.format == "json")
+        return 1
+    client = TypefullyPostClient(_settings(args))
+    info = client.upload_media(
+        check.path,
+        file_name=check.upload_name,
+        alt_text=args.alt_text,
+        wait=not args.no_wait,
+        timeout=args.timeout,
+        interval=args.interval,
+    )
+    emit({**info, "local_check": {"warnings": check.warnings, "probe": check.probe}}, as_json=args.format == "json")
+    return 0
+
+
+def cmd_media_status(args: argparse.Namespace) -> int:
+    client = TypefullyPostClient(_settings(args))
+    emit(client.get_media(args.media_id), as_json=args.format == "json")
     return 0
 
 
@@ -110,19 +232,39 @@ def cmd_post_delete(args: argparse.Namespace) -> int:
 
 
 def cmd_post_check_urls(args: argparse.Namespace) -> int:
-    """Check a thread file or text for URL uniqueness (only yage.ai allowed)."""
-    allowed_domain = getattr(args, "allowed_domain", "yage.ai")
+    """Check post copy: each post holds exactly the expected number of URLs, all on allowed domains."""
+    allowed_domains = args.allowed_domain or ["example.com"]
+    expected_counts: dict[int, int] = {}
+    for raw in args.post_expected_urls or []:
+        idx, value = _parse_index_value(raw, "--post-expected-urls")
+        try:
+            expected_counts[idx + 1] = int(value)
+        except ValueError:
+            raise SystemExit(f"--post-expected-urls expects N=COUNT, got {raw!r}") from None
+    single_text = not getattr(args, "thread_file", None)
     if getattr(args, "thread_file", None):
-        results = check_thread_file(args.thread_file, allowed_domain=allowed_domain)
+        posts = parse_thread_file(args.thread_file)
     elif getattr(args, "thread_stdin", False):
-        text = sys.stdin.read()
-        r = check_post_urls(text, allowed_domain=allowed_domain)
-        results = [{"tweet_index": 1, **r.to_dict()}]
+        # Kept as one body, as before: stdin is checked as a single text.
+        posts = [sys.stdin.read()]
     elif getattr(args, "text", None):
-        r = check_post_urls(args.text.replace("\\n", "\n"), allowed_domain=allowed_domain)
-        results = [{"tweet_index": 1, **r.to_dict()}]
+        posts = [args.text.replace("\\n", "\n")]
     else:
         raise SystemExit("provide --thread-file, --thread-stdin, or --text")
+    if args.expected_urls < 0 or any(v < 0 for v in expected_counts.values()):
+        raise SystemExit("expected URL counts must be >= 0")
+    beyond = sorted(i for i in expected_counts if i > len(posts))
+    if beyond:
+        raise SystemExit(f"--post-expected-urls refers to post(s) {beyond}, but there are {len(posts)} post(s)")
+    results = check_thread_posts(
+        posts,
+        allowed_domain=allowed_domains,
+        include_subdomains=args.include_subdomains,
+        expected_counts=expected_counts,
+        default_expected=args.expected_urls,
+    )
+    if single_text:
+        results = results[:1]
 
     emit({"results": results, "all_passed": all(r.get("passed", False) for r in results)},
          as_json=args.format == "json")
@@ -252,6 +394,14 @@ def build_parser() -> argparse.ArgumentParser:
         long_post.add_argument("--no-long-post", dest="long_post", action="store_false")
         if name == "create":
             p.add_argument("--publish-at")
+        if name in {"draft", "create"}:
+            p.add_argument("--media", action="append", metavar="MEDIA_ID", help="Attach an uploaded media ID to post 1 (repeatable)")
+            p.add_argument("--post-media", action="append", metavar="N=MEDIA_ID", help="Attach an uploaded media ID to post N (1-based, repeatable)")
+            p.add_argument("--media-file", action="append", metavar="PATH", help="Check, upload, and attach a local file to post 1 (repeatable)")
+            p.add_argument("--post-media-file", action="append", metavar="N=PATH", help="Check, upload, and attach a local file to post N (repeatable)")
+            p.add_argument("--alt-text", help="Alt text applied to every file uploaded with --media-file/--post-media-file (not to --media IDs)")
+            p.add_argument("--made-with-ai", action="store_true", help="Label every post in the draft as made with AI")
+            p.add_argument("--made-with-ai-post", action="append", type=int, metavar="N", help="Label post N as made with AI (repeatable)")
         p.set_defaults(func=func)
     p = post_sub.add_parser("publish")
     p.add_argument("draft_id")
@@ -277,8 +427,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text")
     p.add_argument("--thread-file")
     p.add_argument("--thread-stdin", action="store_true")
-    p.add_argument("--allowed-domain", default="example.com")
+    p.add_argument("--allowed-domain", action="append", help="Allowed URL domain (repeatable; default example.com)")
+    p.add_argument("--include-subdomains", action="store_true", help="Also accept subdomains such as www.<domain> (explicit http(s) URLs only)")
+    p.add_argument("--expected-urls", type=int, default=1, help="URL-like tokens each post must contain (default 1)")
+    p.add_argument("--post-expected-urls", action="append", metavar="N=COUNT", help="Override the expected URL count for post N")
     p.set_defaults(func=cmd_post_check_urls)
+
+    media = sub.add_parser("media")
+    media_sub = media.add_subparsers(dest="cmd", required=True)
+    p = media_sub.add_parser("check", help="Validate a local file against Typefully's X media limits (no network)")
+    p.add_argument("path")
+    p.set_defaults(func=cmd_media_check)
+    p = media_sub.add_parser("upload", help="Upload a local file to Typefully and wait until it is ready")
+    p.add_argument("path")
+    p.add_argument("--alt-text")
+    p.add_argument("--no-wait", action="store_true")
+    p.add_argument("--timeout", type=float, default=600)
+    p.add_argument("--interval", type=float, default=3)
+    p.set_defaults(func=cmd_media_upload)
+    p = media_sub.add_parser("status", help="Show the processing status of an uploaded media ID")
+    p.add_argument("media_id")
+    p.set_defaults(func=cmd_media_status)
 
     metrics = sub.add_parser("metrics")
     metrics_sub = metrics.add_subparsers(dest="cmd", required=True)
@@ -360,6 +529,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except ApiError as exc:
         emit(exc.to_payload(), as_json=getattr(args, "format", "json") == "json")
+        return 1
+    except MediaProcessingError as exc:
+        emit(exc.to_payload(), as_json=getattr(args, "format", "json") == "json")
+        return 1
+    except json.JSONDecodeError as exc:
+        emit({"error": "invalid_api_response", "message": str(exc)}, as_json=getattr(args, "format", "json") == "json")
+        return 1
+    except ValueError as exc:
+        emit({"error": "invalid_input", "message": str(exc)}, as_json=getattr(args, "format", "json") == "json")
         return 1
     except TypefullyTwitterError as exc:
         emit({"error": "typefully_twitter_error", "message": str(exc)}, as_json=getattr(args, "format", "json") == "json")

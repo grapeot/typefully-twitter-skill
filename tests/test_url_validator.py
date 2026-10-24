@@ -155,3 +155,51 @@ class TestBareDomainRegex:
     def test_does_not_match_version_numbers(self):
         tokens = find_url_like_tokens("version 2.0 is out")
         assert len(tokens) == 0
+
+class TestMultiDomain:
+    """Multiple allowed domains, subdomains, and expected URL counts."""
+
+    def test_two_links_on_two_allowed_domains(self):
+        from typefully_twitter_skill.url_validator import check_post_urls
+        text = "watch https://www.youtube.com/watch?v=abc and https://www.example.com/post?utm_source=x"
+        r = check_post_urls(text, allowed_domain=["youtube.com", "example.com"], include_subdomains=True, expected_count=2)
+        assert r.passed, r.errors
+
+    def test_subdomain_rejected_without_flag(self):
+        from typefully_twitter_skill.url_validator import check_post_urls
+        r = check_post_urls("see https://www.example.com/x", allowed_domain="example.com")
+        assert not r.passed
+
+    def test_lookalike_domain_is_not_a_subdomain(self):
+        from typefully_twitter_skill.url_validator import check_post_urls
+        r = check_post_urls("see https://badexample.com/x", allowed_domain="example.com", include_subdomains=True)
+        assert not r.passed
+
+    def test_expected_count_mismatch(self):
+        from typefully_twitter_skill.url_validator import check_post_urls
+        r = check_post_urls("one https://example.com/a", allowed_domain="example.com", expected_count=2)
+        assert not r.passed
+        assert "expected exactly 2" in r.errors[0]
+
+    def test_thread_per_post_expected_counts(self):
+        from typefully_twitter_skill.url_validator import check_thread_posts
+        posts = ["main https://www.example.net/video/1", "reply https://example.com/a\nhttps://youtu.be/x"]
+        results = check_thread_posts(
+            posts,
+            allowed_domain=["example.net", "example.com", "youtu.be"],
+            include_subdomains=True,
+            expected_counts={2: 2},
+        )
+        assert [r["passed"] for r in results] == [True, True, True]
+        assert results[-1]["expected_urls"] == 3
+
+    def test_cli_repeatable_allowed_domain(self, capsys):
+        import json
+        from typefully_twitter_skill.cli import main
+        code = main([
+            "post", "check-urls", "--text", "a https://www.youtube.com/watch?v=1\\nb https://example.com/x",
+            "--allowed-domain", "youtube.com", "--allowed-domain", "example.com", "--include-subdomains",
+            "--expected-urls", "2", "--format", "json",
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert code == 0 and out["all_passed"]
