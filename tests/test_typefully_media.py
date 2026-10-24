@@ -41,13 +41,13 @@ def test_safe_upload_name_replaces_disallowed_characters():
 
 def test_parse_ffprobe_extracts_limits_fields():
     info = parse_ffprobe({
-        "format": {"duration": "97.28", "bit_rate": "1318699"},
+        "format": {"duration": "90.0", "bit_rate": "1300000"},
         "streams": [
             {"codec_type": "audio", "codec_name": "aac"},
             {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080, "avg_frame_rate": "25/1"},
         ],
     })
-    assert info == {"duration_s": 97.28, "bit_rate": 1318699.0, "width": 1920, "height": 1080, "fps": 25.0, "video_codec": "h264"}
+    assert info == {"duration_s": 90.0, "bit_rate": 1300000.0, "width": 1920, "height": 1080, "fps": 25.0, "video_codec": "h264"}
 
 
 def _video(tmp_path: Path, name: str = "clip.mp4") -> Path:
@@ -64,7 +64,7 @@ def test_check_media_accepts_short_1080p_clip(tmp_path):
 
 
 def test_check_media_rejects_video_longer_than_ten_minutes(tmp_path):
-    probe = {"duration_s": 866.0, "bit_rate": 0.7e6, "width": 1920, "height": 1080, "fps": 25.0, "video_codec": "h264"}
+    probe = {"duration_s": 900.0, "bit_rate": 0.7e6, "width": 1920, "height": 1080, "fps": 25.0, "video_codec": "h264"}
     check = check_media(_video(tmp_path), probe=probe)
     assert not check.ok
     assert any("600 s" in e and "x.com" in e for e in check.errors)
@@ -276,3 +276,112 @@ def test_cli_media_check_is_local(monkeypatch, tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["kind"] == "image"
+
+
+def test_put_network_error_does_not_leak_url(monkeypatch, tmp_path):
+    import requests
+
+    def boom(url, **kwargs):
+        raise requests.ConnectionError(f"Max retries exceeded with url: {url}")
+
+    monkeypatch.setattr("requests.put", boom)
+    client = TypefullyPostClient(base_settings())
+    with pytest.raises(ApiError) as exc:
+        client.put_presigned(UPLOAD_URL, _video(tmp_path))
+    assert "secret-signature" not in str(exc.value)
+    assert "ConnectionError" in str(exc.value)
+
+
+def test_put_s3_error_keeps_only_code_and_message(monkeypatch, tmp_path):
+    body = (
+        "<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match"
+        "</Message><AWSAccessKeyId>AKIAFAKEKEY</AWSAccessKeyId><StringToSign>AWS4 secret</StringToSign></Error>"
+    )
+    monkeypatch.setattr("requests.put", lambda url, **k: Resp(403, text=body))
+    client = TypefullyPostClient(base_settings())
+    with pytest.raises(ApiError) as exc:
+        client.put_presigned(UPLOAD_URL, _video(tmp_path))
+    assert "SignatureDoesNotMatch" in str(exc.value)
+    assert "AKIAFAKEKEY" not in str(exc.value) and "StringToSign" not in str(exc.value)
+
+
+def test_put_sends_file_handle_as_data(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_put(url, **kwargs):
+        seen.update(kwargs)
+        return Resp(204, text="")
+
+    monkeypatch.setattr("requests.put", fake_put)
+    TypefullyPostClient(base_settings()).put_presigned(UPLOAD_URL, _video(tmp_path))
+    assert set(seen) == {"data", "timeout"}
+    assert hasattr(seen["data"], "read")
+
+
+def test_cli_null_mime_falls_back_to_file_name(monkeypatch, capsys):
+    _cli_env(monkeypatch)
+
+    def fake_request(method, url, **kwargs):
+        if method == "GET":
+            return Resp(200, {"status": "ready", "mime": None, "file_name": "clip.mp4"})
+        raise AssertionError("draft must not be created")
+
+    monkeypatch.setattr("requests.request", fake_request)
+    code = cli.main(["post", "draft", "--text", "main", "--media", "a", "--media", "b", "--format", "json"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["error"] == "invalid_post_media"
+
+
+def test_cli_media_file_uploads_and_attaches_after_existing_ids(monkeypatch, tmp_path, capsys):
+    _cli_env(monkeypatch)
+    sent = {}
+    image = tmp_path / "pic.png"
+    image.write_bytes(b"\x89PNG" + b"\x00" * 10)
+
+    def fake_request(method, url, **kwargs):
+        if url.endswith("/media/upload"):
+            sent["upload"] = kwargs["json"]
+            return Resp(201, {"media_id": "new", "upload_url": UPLOAD_URL})
+        if method == "GET" and "/media/" in url:
+            return Resp(200, {"status": "ready", "mime": "image/png"})
+        if method == "POST" and url.endswith("/drafts"):
+            sent["draft"] = kwargs["json"]
+            return Resp(201, {"id": 9, "platforms": kwargs["json"]["platforms"]})
+        raise AssertionError((method, url))
+
+    monkeypatch.setattr("requests.request", fake_request)
+    monkeypatch.setattr("requests.put", lambda url, **k: Resp(200, text=""))
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("main\n---\nreply"))
+    code = cli.main([
+        "post", "draft", "--thread-stdin", "--post-media", "2=old", "--post-media-file", f"2={image}",
+        "--alt-text", "a chart", "--made-with-ai", "--format", "json",
+    ])
+    assert code == 0, capsys.readouterr().out
+    assert sent["upload"] == {"file_name": "pic.png", "alt_text": "a chart"}
+    posts = sent["draft"]["platforms"]["x"]["posts"]
+    assert posts[0] == {"text": "main", "made_with_ai": True}
+    assert posts[1] == {"text": "reply", "media_ids": ["old", "new"], "made_with_ai": True}
+
+
+def test_cli_mix_violation_stops_before_upload(monkeypatch, tmp_path, capsys):
+    _cli_env(monkeypatch)
+    image = tmp_path / "pic.png"
+    image.write_bytes(b"\x89PNG" + b"\x00" * 10)
+
+    def fake_request(method, url, **kwargs):
+        if method == "GET":
+            return Resp(200, {"status": "ready", "mime": "video/mp4"})
+        raise AssertionError("no upload or draft expected")
+
+    monkeypatch.setattr("requests.request", fake_request)
+    code = cli.main(["post", "draft", "--text", "main", "--media", "vid", "--media-file", str(image), "--format", "json"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["error"] == "invalid_post_media"
+
+
+def test_cli_check_urls_rejects_bad_expected_counts(monkeypatch):
+    with pytest.raises(SystemExit):
+        cli.main(["post", "check-urls", "--text", "a https://example.com", "--post-expected-urls", "2=1"])
+    with pytest.raises(SystemExit):
+        cli.main(["post", "check-urls", "--text", "a https://example.com", "--expected-urls", "-1"])

@@ -176,10 +176,14 @@ class TypefullyPostClient:
         never echoed in errors.
         """
         file_path = Path(path)
-        with file_path.open("rb") as handle:
-            response = requests.put(upload_url, data=handle, timeout=timeout or max(self.timeout, 600))
+        try:
+            with file_path.open("rb") as handle:
+                response = requests.put(upload_url, data=handle, timeout=timeout or max(self.timeout, 600))
+        except requests.RequestException as exc:
+            # The exception text embeds the signed URL; report only the error type.
+            raise ApiError("typefully_media_upload", 0, f"network error: {type(exc).__name__}") from None
         if response.status_code not in (200, 204):
-            raise ApiError("typefully_media_upload", response.status_code, _redact(response.text[:300], upload_url))
+            raise ApiError("typefully_media_upload", response.status_code, _storage_error_summary(response.text))
         return response.status_code
 
     def get_media(self, media_id: str) -> dict[str, Any]:
@@ -249,13 +253,21 @@ def build_x_posts(
     return x_posts
 
 
-def _redact(text: str, secret: str) -> str:
-    if secret and secret in text:
-        text = text.replace(secret, "<redacted-upload-url>")
-    base = secret.split("?", 1)[0] if secret else ""
-    if base and base in text:
-        text = text.replace(base, "<redacted-upload-url>")
-    return text
+_XML_CODE_RE = re.compile(r"<Code>([^<]{1,100})</Code>")
+_XML_MESSAGE_RE = re.compile(r"<Message>([^<]{1,300})</Message>")
+
+
+def _storage_error_summary(body: str) -> str:
+    """Keep only the storage error code and message.
+
+    S3 error bodies can echo the access key ID, string-to-sign, and canonical
+    request, so the raw body is never passed through.
+    """
+    code = _XML_CODE_RE.search(body or "")
+    message = _XML_MESSAGE_RE.search(body or "")
+    if code or message:
+        return ": ".join(m.group(1) for m in (code, message) if m)
+    return "upload rejected by storage (body withheld)"
 
 
 def compact_draft_summary(draft: dict[str, Any]) -> dict[str, Any]:

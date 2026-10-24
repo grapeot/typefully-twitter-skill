@@ -100,15 +100,15 @@ Flow, following the Typefully v2 API: `POST /v2/social-sets/{id}/media/upload` w
 Invariants:
 
 1. A draft never references media whose status is not `ready`; the CLI re-reads every media ID before creating the draft.
-2. The presigned `PUT` sends no `Authorization` or `Content-Type` header (the signature was computed without them), and the upload URL never appears in output or error messages.
-3. Each X post holds at most one video or GIF, does not mix video with images, and holds at most four images. This is checked before the draft is created.
+2. The presigned `PUT` sends no `Authorization` or `Content-Type` header (the signature was computed without them), and the upload URL never appears in output or error messages: network errors report only the exception type, and storage error bodies are reduced to their `Code` and `Message`.
+3. Each X post holds at most one video or GIF, does not mix video with images, and holds at most four images. Media kind comes from the MIME type, falling back to the file name; an undeterminable kind is an error. This is checked before any upload starts.
 4. Local files that break Typefully's X limits fail in `media check` before any network request.
 5. Uploading media and creating a draft are remote writes that are not publicly visible; scheduling and publishing keep the existing safety rules.
 6. Without media flags, draft payloads are byte-for-byte what they were before media support.
 
 ### URL Checks
 
-`post check-urls` accepts repeatable `--allowed-domain`, `--include-subdomains` (a host matches when it equals an allowed domain or ends with `.` plus it), `--expected-urls N` (default 1, per post), and `--post-expected-urls N=COUNT`. Every URL-like token must be on an allowed domain, and each post must hold exactly its expected count; the combined thread check expects the sum.
+`post check-urls` accepts repeatable `--allowed-domain`, `--include-subdomains` (for explicit http(s) URLs, a host matches when it equals an allowed domain or ends with `.` plus it; bare-domain tokens are matched exactly), `--expected-urls N` (default 1, per post), and `--post-expected-urls N=COUNT`. Every URL-like token must be on an allowed domain, and each post must hold exactly its expected count; the combined thread check expects the sum.
 
 ### Typefully Metrics Commands
 

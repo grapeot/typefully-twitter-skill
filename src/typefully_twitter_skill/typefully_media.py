@@ -84,6 +84,14 @@ def media_kind(path: str | Path) -> str:
     return "unsupported"
 
 
+def kind_from_media_info(info: dict[str, Any]) -> str:
+    """Kind of an uploaded media item: from its MIME type, else its file name."""
+    kind = kind_from_mime(info.get("mime"))
+    if kind == "unknown" and info.get("file_name"):
+        kind = media_kind(info["file_name"])
+    return kind
+
+
 def kind_from_mime(mime: str | None) -> str:
     if not mime:
         return "unknown"
@@ -146,12 +154,15 @@ def probe_media(path: str | Path) -> dict[str, Any] | None:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         return None
-    result = subprocess.run(
-        [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "ffprobe timed out after 60 s"}
     if result.returncode != 0:
         return {"error": result.stderr.strip()[:300]}
     return parse_ffprobe(json.loads(result.stdout or "{}"))
@@ -254,4 +265,6 @@ def validate_post_media_kinds(kinds: list[str]) -> list[str]:
         errors.append(f"An X post can carry at most {X_MAX_IMAGES_PER_POST} images")
     if "pdf" in kinds:
         errors.append("PDF attachments are not supported on X posts")
+    if "unknown" in kinds or "unsupported" in kinds:
+        errors.append("Could not determine the type of an attached media item")
     return errors
